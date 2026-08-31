@@ -169,12 +169,15 @@ func run(ctx *cli.Context) error {
 
 	var htpasswdSecrets auth.SecretProvider
 
+	// `config.validateConfig` checks that at most one authentication mechanism can be used at a time
 	authMode := "disabled"
 	if c.HtpasswdFile != "" {
 		authMode = "basic"
 		htpasswdSecrets = auth.HtpasswdFileProvider(c.HtpasswdFile)
 	} else if c.TLSCaFile != "" {
 		authMode = "mTLS"
+	} else if c.LDAP != nil {
+		authMode = "LDAP"
 	}
 	log.Println("Authentication:", authMode)
 
