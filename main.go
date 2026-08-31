@@ -255,25 +255,23 @@ func startHttpServer(c *config.Config, httpServer **http.Server,
 		c.EnableACKeyInstanceMangling, checkClientCertForReads, checkClientCertForWrites, gitCommit, gitTags,
 		c.MaxBlobSize)
 
-	cacheHandler := h.CacheHandler
-	var ldapAuthenticator authenticator
-	var basicAuthenticator auth.BasicAuth
-	if c.HtpasswdFile != "" {
-		if c.AllowUnauthenticatedReads {
-			cacheHandler = unauthenticatedReadWrapper(cacheHandler, htpasswdSecrets, c.HTTPAddress)
-		} else {
-			basicAuthenticator = auth.BasicAuth{Realm: c.HTTPAddress, Secrets: htpasswdSecrets}
-			cacheHandler = basicAuthWrapper(cacheHandler, &basicAuthenticator)
-		}
+	var authenticator authenticator
+	if htpasswdSecrets != nil {
+		authenticator = &auth.BasicAuth{Realm: c.HTTPAddress, Secrets: htpasswdSecrets}
 	} else if c.LDAP != nil {
+		ldapAuthenticator, ldapErr := ldap.New(c.LDAP)
+		if ldapErr != nil {
+			log.Fatal("Failed to create LDAP connection: ", ldapErr)
+		}
+		authenticator = ldapAuthenticator
+	}
+
+	cacheHandler := h.CacheHandler
+	if authenticator != nil {
 		if c.AllowUnauthenticatedReads {
-			cacheHandler = unauthenticatedReadWrapper(cacheHandler, htpasswdSecrets, c.HTTPAddress)
+			cacheHandler = unauthenticatedReadWrapper(cacheHandler, authenticator)
 		} else {
-			var ldap_err error
-			if ldapAuthenticator, ldap_err = ldap.New(c.LDAP); ldap_err != nil {
-				log.Fatal("Failed to create LDAP connection: ", ldap_err)
-			}
-			cacheHandler = ldapAuthWrapper(cacheHandler, ldapAuthenticator)
+			cacheHandler = authWrapper(cacheHandler, authenticator)
 		}
 	}
 
@@ -290,10 +288,8 @@ func startHttpServer(c *config.Config, httpServer **http.Server,
 	if !c.AllowUnauthenticatedReads {
 		if c.TLSCaFile != "" {
 			statusHandler = h.VerifyClientCertHandler(statusHandler).ServeHTTP
-		} else if c.HtpasswdFile != "" {
-			statusHandler = basicAuthWrapper(statusHandler, &basicAuthenticator)
-		} else if c.LDAP != nil {
-			statusHandler = ldapAuthWrapper(statusHandler, ldapAuthenticator)
+		} else if authenticator != nil {
+			statusHandler = authWrapper(statusHandler, authenticator)
 		}
 	}
 
@@ -316,10 +312,8 @@ func startHttpServer(c *config.Config, httpServer **http.Server,
 		if !c.AllowUnauthenticatedReads {
 			if c.TLSCaFile != "" {
 				middlewareHandler = h.VerifyClientCertHandler(middlewareHandler)
-			} else if c.HtpasswdFile != "" {
-				middlewareHandler = basicAuthWrapper(middlewareHandler.ServeHTTP, &basicAuthenticator)
-			} else if c.LDAP != nil {
-				middlewareHandler = ldapAuthWrapper(middlewareHandler.ServeHTTP, ldapAuthenticator)
+			} else if authenticator != nil {
+				middlewareHandler = authWrapper(middlewareHandler.ServeHTTP, authenticator)
 			}
 		}
 		mux.Handle("/metrics", middlewareHandler)
@@ -471,24 +465,19 @@ func startGrpcServer(c *config.Config, grpcServer **grpc.Server,
 type authenticator interface {
 	NewContext(ctx context.Context, r *http.Request) context.Context
 	Wrap(auth.AuthenticatedHandlerFunc) http.HandlerFunc
+	CheckAuth(r *http.Request) string
 }
 
 // A http.HandlerFunc wrapper which requires successful basic
 // authentication for all requests.
-func basicAuthWrapper(handler http.HandlerFunc, authenticator *auth.BasicAuth) http.HandlerFunc {
-	return auth.JustCheck(authenticator, handler)
-}
-
-func ldapAuthWrapper(handler http.HandlerFunc, authenticator authenticator) http.HandlerFunc {
+func authWrapper(handler http.HandlerFunc, authenticator authenticator) http.HandlerFunc {
 	return auth.JustCheck(authenticator, handler)
 }
 
 // A http.HandlerFunc wrapper which requires successful basic
 // authentication for write requests, but allows unauthenticated
 // read requests.
-func unauthenticatedReadWrapper(handler http.HandlerFunc, secrets auth.SecretProvider, addr string) http.HandlerFunc {
-	authenticator := &auth.BasicAuth{Realm: addr, Secrets: secrets}
-
+func unauthenticatedReadWrapper(handler http.HandlerFunc, authenticator authenticator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			handler(w, r)
