@@ -1,7 +1,6 @@
 package ldap
 
 import (
-	"context"
 	"encoding/base64"
 	"fmt"
 	"log"
@@ -142,19 +141,4 @@ func (c *Cache) Wrap(wrapped auth.AuthenticatedHandlerFunc) http.HandlerFunc {
 			wrapped(w, ar)
 		}
 	}
-}
-
-func (c *Cache) NewContext(ctx context.Context, r *http.Request) context.Context {
-	type key int
-	// key of context.WithValue must be comparable and should not be of type
-	// string or any other built-in type to avoid collisions between packages
-	// using context
-	var infoKey key
-	info := &auth.Info{Username: c.CheckAuth(r), ResponseHeaders: make(http.Header)}
-
-	info.Authenticated = info.Username != ""
-	if !info.Authenticated {
-		info.ResponseHeaders.Set(c.Headers.V().Authenticate, `Basic realm="`+c.Realm+`"`)
-	}
-	return context.WithValue(ctx, infoKey, info)
 }

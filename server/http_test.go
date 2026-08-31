@@ -39,7 +39,7 @@ func TestDownloadFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), true, false, false, false, "", "", math.MaxInt64)
+	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), true, false, "", "", math.MaxInt64)
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(h.CacheHandler)
@@ -107,7 +107,7 @@ func TestUploadFilesConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), true, false, false, false, "", "", math.MaxInt64)
+	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), true, false, "", "", math.MaxInt64)
 	handler := http.HandlerFunc(h.CacheHandler)
 
 	var wg sync.WaitGroup
@@ -171,7 +171,7 @@ func TestUploadSameFileConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), true, false, false, false, "", "", math.MaxInt64)
+	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), true, false, "", "", math.MaxInt64)
 	handler := http.HandlerFunc(h.CacheHandler)
 
 	var wg sync.WaitGroup
@@ -212,7 +212,7 @@ func TestUploadCorruptedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), true, false, false, false, "", "", math.MaxInt64)
+	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), true, false, "", "", math.MaxInt64)
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(h.CacheHandler)
 	handler.ServeHTTP(rr, r)
@@ -254,9 +254,7 @@ func TestUploadEmptyActionResult(t *testing.T) {
 	}
 	validate := true
 	mangle := false
-	checkClientCertForReads := false
-	checkClientCertForWrites := false
-	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), validate, mangle, checkClientCertForReads, checkClientCertForWrites, "", "", math.MaxInt64)
+	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), validate, mangle, "", "", math.MaxInt64)
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(h.CacheHandler)
 	handler.ServeHTTP(rr, r)
@@ -316,9 +314,7 @@ func testEmptyBlobAvailable(t *testing.T, method string) {
 	}
 	validate := true
 	mangle := false
-	checkClientCertForReads := false
-	checkClientCertForWrites := false
-	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), validate, mangle, checkClientCertForReads, checkClientCertForWrites, "", "", math.MaxInt64)
+	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), validate, mangle, "", "", math.MaxInt64)
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(h.CacheHandler)
 	handler.ServeHTTP(rr, r)
@@ -341,7 +337,7 @@ func TestStatusPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), true, false, false, false, "", "", math.MaxInt64)
+	h := NewHTTPCache(c, testutils.NewSilentLogger(), testutils.NewSilentLogger(), true, false, "", "", math.MaxInt64)
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(h.StatusPageHandler)
 	handler.ServeHTTP(rr, r)
@@ -485,7 +481,7 @@ func TestRemoteReturnsNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewHTTPCache(emptyCache, testutils.NewSilentLogger(), testutils.NewSilentLogger(), true, false, false, false, "", "", math.MaxInt64)
+	h := NewHTTPCache(emptyCache, testutils.NewSilentLogger(), testutils.NewSilentLogger(), true, false, "", "", math.MaxInt64)
 	// create a fake http.Request
 	_, hash := testutils.RandomDataAndHash(1024)
 	url, _ := url.Parse(fmt.Sprintf("http://localhost:8080/ac/%s", hash))
@@ -523,7 +519,7 @@ func TestManglingACKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewHTTPCache(diskCache, testutils.NewSilentLogger(), testutils.NewSilentLogger(), false, true, false, false, "", "", math.MaxInt64)
+	h := NewHTTPCache(diskCache, testutils.NewSilentLogger(), testutils.NewSilentLogger(), false, true, "", "", math.MaxInt64)
 	// create a fake http.Request
 	data, hash := testutils.RandomDataAndHash(blobSize)
 	err = diskCache.Put(context.Background(), cache.RAW, hash, int64(len(data)), bytes.NewReader(data))

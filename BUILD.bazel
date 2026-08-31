@@ -10,7 +10,7 @@ gazelle(
 
 go_library(
     name = "go_default_library",
-    srcs = ["main.go"],
+    srcs = ["main.go", "tls-auth.go"],
     importpath = "github.com/buchgr/bazel-remote/v2",
     visibility = ["//visibility:private"],
     deps = [

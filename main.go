@@ -248,12 +248,8 @@ func startHttpServer(c *config.Config, httpServer **http.Server,
 		WriteTimeout: c.HTTPWriteTimeout,
 	}
 
-	checkClientCertForReads := c.TLSCaFile != "" && !c.AllowUnauthenticatedReads
-	checkClientCertForWrites := c.TLSCaFile != ""
 	validateAC := !c.DisableHTTPACValidation
-	h := server.NewHTTPCache(diskCache, c.AccessLogger, c.ErrorLogger, validateAC,
-		c.EnableACKeyInstanceMangling, checkClientCertForReads, checkClientCertForWrites, gitCommit, gitTags,
-		c.MaxBlobSize)
+	h := server.NewHTTPCache(diskCache, c.AccessLogger, c.ErrorLogger, validateAC, c.EnableACKeyInstanceMangling, gitCommit, gitTags, c.MaxBlobSize)
 
 	var authenticator authenticator
 	if htpasswdSecrets != nil {
@@ -264,15 +260,13 @@ func startHttpServer(c *config.Config, httpServer **http.Server,
 			log.Fatal("Failed to create LDAP connection: ", ldapErr)
 		}
 		authenticator = ldapAuthenticator
+	} else if c.TLSCaFile != "" {
+		authenticator = &TLSAuthenticator{}
 	}
 
 	cacheHandler := h.CacheHandler
 	if authenticator != nil {
-		if c.AllowUnauthenticatedReads {
-			cacheHandler = unauthenticatedReadWrapper(cacheHandler, authenticator)
-		} else {
-			cacheHandler = authWrapper(cacheHandler, authenticator)
-		}
+		cacheHandler = authWrapper(cacheHandler, authenticator, c.AllowUnauthenticatedReads)
 	}
 
 	if c.IdleTimeout > 0 {
@@ -285,12 +279,8 @@ func startHttpServer(c *config.Config, httpServer **http.Server,
 
 	var statusHandler http.HandlerFunc = h.StatusPageHandler
 
-	if !c.AllowUnauthenticatedReads {
-		if c.TLSCaFile != "" {
-			statusHandler = h.VerifyClientCertHandler(statusHandler).ServeHTTP
-		} else if authenticator != nil {
-			statusHandler = authWrapper(statusHandler, authenticator)
-		}
+	if authenticator != nil {
+		statusHandler = authWrapper(statusHandler, authenticator, c.AllowUnauthenticatedReads)
 	}
 
 	if c.EnableEndpointMetrics {
@@ -308,17 +298,13 @@ func startHttpServer(c *config.Config, httpServer **http.Server,
 			}),
 		})
 
-		middlewareHandler := middlewarestd.Handler("metrics", metricsMdlw, promhttp.Handler())
-		if !c.AllowUnauthenticatedReads {
-			if c.TLSCaFile != "" {
-				middlewareHandler = h.VerifyClientCertHandler(middlewareHandler)
-			} else if authenticator != nil {
-				middlewareHandler = authWrapper(middlewareHandler.ServeHTTP, authenticator)
-			}
+		middlewareHandler := middlewarestd.Handler("metrics", metricsMdlw, promhttp.Handler()).ServeHTTP
+		if authenticator != nil {
+			middlewareHandler = authWrapper(middlewareHandler, authenticator, c.AllowUnauthenticatedReads)
 		}
-		mux.Handle("/metrics", middlewareHandler)
+		mux.HandleFunc("/metrics", middlewareHandler)
 
-		statusHandler = middlewarestd.Handler("status", metricsMdlw, http.HandlerFunc(h.StatusPageHandler)).ServeHTTP
+		statusHandler = middlewarestd.Handler("status", metricsMdlw, statusHandler).ServeHTTP
 
 		ch := cacheHandler // Avoid an infinite loop in the closure below.
 		cacheHandler = func(w http.ResponseWriter, r *http.Request) {
@@ -463,33 +449,25 @@ func startGrpcServer(c *config.Config, grpcServer **grpc.Server,
 }
 
 type authenticator interface {
-	NewContext(ctx context.Context, r *http.Request) context.Context
 	Wrap(auth.AuthenticatedHandlerFunc) http.HandlerFunc
-	CheckAuth(r *http.Request) string
 }
 
 // A http.HandlerFunc wrapper which requires successful basic
-// authentication for all requests.
-func authWrapper(handler http.HandlerFunc, authenticator authenticator) http.HandlerFunc {
-	return auth.JustCheck(authenticator, handler)
-}
+// authentication for all requests or for write requests only
+// depending on the value of 'allowUnauthenticatedReads'.
+func authWrapper(handler http.HandlerFunc, authenticator authenticator, allowUnauthenticatedReads bool) http.HandlerFunc {
+	authHandler := authenticator.Wrap(func(w http.ResponseWriter, ar *auth.AuthenticatedRequest) {
+		handler(w, &ar.Request)
+	})
+	if !allowUnauthenticatedReads {
+		return authHandler
+	}
 
-// A http.HandlerFunc wrapper which requires successful basic
-// authentication for write requests, but allows unauthenticated
-// read requests.
-func unauthenticatedReadWrapper(handler http.HandlerFunc, authenticator authenticator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			handler(w, r)
 			return
 		}
-
-		if authenticator.CheckAuth(r) != "" {
-			handler(w, r)
-			return
-		}
-
-		http.Error(w, "Authorization required", http.StatusUnauthorized)
-		// TODO: pass in a logger so we can log this event?
+		authHandler(w, r)
 	}
 }
