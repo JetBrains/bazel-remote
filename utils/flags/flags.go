@@ -169,7 +169,7 @@ func GetCliFlags() []cli.Flag {
 		&cli.BoolFlag{
 			Name:        "allow_unauthenticated_reads",
 			Value:       false,
-			Usage:       "If authentication is enabled (--htpasswd_file or --tls_ca_file), allow unauthenticated clients read access.",
+			Usage:       "If authentication is enabled (--htpasswd_file, --tls_ca_file or --ldap.url), allow unauthenticated clients read access.",
 			DefaultText: "false, ie if authentication is required, read-only requests must also be authenticated",
 			EnvVars:     []string{"BAZEL_REMOTE_UNAUTHENTICATED_READS"},
 		},

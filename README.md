@@ -221,7 +221,7 @@ OPTIONS:
       [$BAZEL_REMOTE_TLS_KEY_FILE]
 
    --allow_unauthenticated_reads If authentication is enabled
-      (--htpasswd_file or --tls_ca_file), allow unauthenticated clients read
+      (--htpasswd_file, --tls_ca_file or --ldap.url), allow unauthenticated clients read
       access. (default: false, ie if authentication is required, read-only
       requests must also be authenticated) [$BAZEL_REMOTE_UNAUTHENTICATED_READS]
 
