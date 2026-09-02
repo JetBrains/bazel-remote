@@ -17,6 +17,10 @@ type CacheConfig struct {
 	diskCache        *diskCache        // Assumed to be non-nil.
 	metrics          *metricsDecorator // May be nil.
 	maxSizeHardLimit int64
+
+	// The number of concurrently allowed blocking filesystem operations.
+	// Defaults to defaultDiskWaitSemaphoreWeight().
+	diskWaitSemaphoreWeight int64
 }
 
 func WithStorageMode(mode string) Option {
@@ -107,6 +111,21 @@ func WithEndpointMetrics() Option {
 		c.metrics.counter.WithLabelValues("get", "ac", "hit").Add(0)
 		c.metrics.counter.WithLabelValues("get", "ac", "miss").Add(0)
 
+		return nil
+	}
+}
+
+// WithDiskWaitSemaphoreWeight sets the maximum number of concurrently
+// running blocking filesystem operations (writes, deletions and downloads
+// from a proxy backend). Requests beyond this limit wait for a slot to
+// become available.
+func WithDiskWaitSemaphoreWeight(weight int64) Option {
+	return func(cc *CacheConfig) error {
+		if weight <= 0 {
+			return fmt.Errorf("invalid disk wait semaphore weight: %d", weight)
+		}
+
+		cc.diskWaitSemaphoreWeight = weight
 		return nil
 	}
 }

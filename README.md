@@ -244,6 +244,14 @@ OPTIONS:
       to preexisting blobs in the cache. (default: 9223372036854775807)
       [$BAZEL_REMOTE_MAX_PROXY_BLOB_SIZE]
 
+   --max_blocking_disk_ops value The maximum number of concurrent blocking
+      filesystem operations (writes, deletions and downloads from proxy
+      backends). Requests above this limit will wait for a free slot. This
+      exists to avoid exceeding Go's limit of 10,000 operating system threads.
+      Setting this too low can increase the average request latency. (default:
+      0, ie use a platform specific default)
+      [$BAZEL_REMOTE_MAX_BLOCKING_DISK_OPS]
+
    --num_uploaders value When using proxy backends, sets the number of
       Goroutines to process parallel uploads to backend. (default: 100)
       [$BAZEL_REMOTE_NUM_UPLOADERS]
@@ -557,6 +565,12 @@ http_address: 0.0.0.0:8080
 #max_queued_uploads: 1000000
 # The largest blob size that will be accepted, for example 10MB:
 #max_blob_size: 10485760
+#
+# The maximum number of concurrent blocking filesystem operations (writes,
+# deletions and downloads from proxy backends). Requests above this limit
+# will wait for a free slot. If unset or 0, a platform specific default is
+# used (2500, or 3000 on macOS).
+#max_blocking_disk_ops: 2500
 #
 #gcs_proxy:
 #  bucket: gcs-bucket

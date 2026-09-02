@@ -30,6 +30,24 @@ import (
 
 const lowercaseDSStoreFile = ".ds_store"
 
+// defaultDiskWaitSemaphoreWeight returns the default limit on the number of
+// concurrently running blocking file syscalls.
+//
+// Go defaults to a limit of 10,000 operating system threads. Going over that
+// limit would result in a crash and therefore we use a semaphore to throttle
+// amount of concurrently running blocking file syscalls. The weight should
+// not be set too low because the average latency could increase if a few
+// slow clients could block all other clients.
+func defaultDiskWaitSemaphoreWeight() int64 {
+	if runtime.GOOS == "darwin" {
+		// Mac seems to fail to create os threads when removing
+		// lots of files, so allow fewer than linux.
+		return 3000
+	}
+
+	return 5000
+}
+
 // New returns a new instance of a filesystem-based cache rooted at `dir`,
 // with a maximum size of `maxSizeBytes` bytes and `opts` Options set.
 func New(dir string, maxSizeBytes int64, opts ...Option) (Cache, error) {
@@ -43,23 +61,6 @@ func New(dir string, maxSizeBytes int64, opts ...Option) (Cache, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// Go defaults to a limit of 10,000 operating system threads. Going
-	// over that limit would result in a crash and therefore we use a
-	// semaphore to throttle amount of concurrently running blocking
-	// file syscalls. A semaphore weight of 5,000 should give plenty of
-	// margin. The weight should not be set too low because the
-	// average latency could increase if a few slow clients could block
-	// all other clients.
-	semaphoreWeight := int64(5000)
-
-	if runtime.GOOS == "darwin" {
-		// Mac seems to fail to create os threads when removing
-		// lots of files, so allow fewer than linux.
-		semaphoreWeight = 3000
-	}
-
-	log.Printf("Limiting concurrent disk waiting requests to %d\n", semaphoreWeight)
 
 	zi, err := zstdimpl.Get("go")
 	if err != nil {
@@ -75,19 +76,16 @@ func New(dir string, maxSizeBytes int64, opts ...Option) (Cache, error) {
 		maxBlobSize:      math.MaxInt64,
 		maxProxyBlobSize: math.MaxInt64,
 
-		// Acquire 1 of these before starting filesystem writes/deletes, or
-		// reject filesystem writes upon failure (since this will create a
-		// new OS thread and we don't want to hit Go's default 10,000 OS
-		// thread limit.
-		diskWaitSem: semaphore.NewWeighted(semaphoreWeight),
-
 		gaugeCacheAge: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "bazel_remote_disk_cache_longest_item_idle_time_seconds",
 			Help: "The idle time (now - atime) of the last item in the LRU cache, updated once per minute. Depending on filesystem mount options (e.g. relatime), the resolution may be measured in 'days' and not accurate to the second. If using noatime this will be 0.",
 		}),
 	}
 
-	cc := CacheConfig{diskCache: &c}
+	cc := CacheConfig{
+		diskCache:               &c,
+		diskWaitSemaphoreWeight: defaultDiskWaitSemaphoreWeight(),
+	}
 
 	// Apply options.
 	for _, o := range opts {
@@ -96,6 +94,13 @@ func New(dir string, maxSizeBytes int64, opts ...Option) (Cache, error) {
 			return nil, err
 		}
 	}
+
+	// Acquire 1 of these before starting filesystem writes/deletes, or reject filesystem writes upon failure
+	// since this will create a new OS thread, and we don't want to hit Go's default 10,000 OS threads limit.
+	// Moreover, the limit could be even smaller e.g., set by in cgroup in K8s.
+	c.diskWaitSem = semaphore.NewWeighted(cc.diskWaitSemaphoreWeight)
+
+	log.Printf("Limiting concurrent disk waiting requests to %d\n", cc.diskWaitSemaphoreWeight)
 
 	// Create the directory structure.
 	hexLetters := []byte("0123456789abcdef")

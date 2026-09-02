@@ -200,6 +200,13 @@ func GetCliFlags() []cli.Flag {
 			DefaultText: strconv.FormatInt(math.MaxInt64, 10),
 			EnvVars:     []string{"BAZEL_REMOTE_MAX_PROXY_BLOB_SIZE"},
 		},
+		&cli.Int64Flag{
+			Name:        "max_blocking_disk_ops",
+			Value:       0,
+			Usage:       "The maximum number of concurrent blocking filesystem operations (writes, deletions and downloads from proxy backends). Requests above this limit will wait for a free slot. This exists to avoid exceeding Go's limit of 10,000 operating system threads. Setting this too low can increase the average request latency.",
+			DefaultText: "0, ie use a platform specific default",
+			EnvVars:     []string{"BAZEL_REMOTE_MAX_BLOCKING_DISK_OPS"},
+		},
 		&cli.IntFlag{
 			Name:    "num_uploaders",
 			Value:   100,

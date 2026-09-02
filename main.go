@@ -152,6 +152,9 @@ func run(ctx *cli.Context) error {
 		disk.WithMaxSizeHardLimit(int64(c.MaxSizeHardLimit) * 1024 * 1024 * 1024),
 		disk.WithAccessLogger(c.AccessLogger),
 	}
+	if c.MaxBlockingDiskOps > 0 {
+		opts = append(opts, disk.WithDiskWaitSemaphoreWeight(c.MaxBlockingDiskOps))
+	}
 	if c.ProxyBackend != nil {
 		opts = append(opts, disk.WithProxyBackend(c.ProxyBackend))
 	}
