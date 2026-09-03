@@ -568,9 +568,9 @@ http_address: 0.0.0.0:8080
 #
 # The maximum number of concurrent blocking filesystem operations (writes,
 # deletions and downloads from proxy backends). Requests above this limit
-# will wait for a free slot. If unset or 0, a platform specific default is
-# used (2500, or 3000 on macOS).
-#max_blocking_disk_ops: 2500
+# will wait for a free slot. If unset or 0, a platform-specific default is
+# used (5000, or 3000 on macOS).
+#max_blocking_disk_ops: 5000
 #
 #gcs_proxy:
 #  bucket: gcs-bucket

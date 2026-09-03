@@ -97,7 +97,7 @@ func New(dir string, maxSizeBytes int64, opts ...Option) (Cache, error) {
 
 	// Acquire 1 of these before starting filesystem writes/deletes, or reject filesystem writes upon failure
 	// since this will create a new OS thread, and we don't want to hit Go's default 10,000 OS threads limit.
-	// Moreover, the limit could be even smaller e.g., set by in cgroup in K8s.
+	// Moreover, the limit could be even smaller e.g., imposed by cgroup or `PodPidsLimit` in kubernetes.
 	c.diskWaitSem = semaphore.NewWeighted(cc.diskWaitSemaphoreWeight)
 
 	log.Printf("Limiting concurrent disk waiting requests to %d\n", cc.diskWaitSemaphoreWeight)
