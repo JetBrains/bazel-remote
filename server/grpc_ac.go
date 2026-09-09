@@ -16,6 +16,7 @@ import (
 	pb "github.com/buchgr/bazel-remote/v2/genproto/build/bazel/remote/execution/v2"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -271,6 +272,10 @@ func (s *grpcServer) UpdateActionResult(ctx context.Context,
 		return nil, status.Error(code, err.Error())
 	}
 
+	// Remember which outputs this result's large blobs are, while the paths
+	// and the client's request metadata are both still in hand.
+	s.blobNames.Record(req.ActionResult, requestMetadataTarget(ctx))
+
 	// Also cache any inlined blobs, separately in the CAS.
 	//
 	// TODO: consider normalizing what we store in the AC (store all results
@@ -383,4 +388,32 @@ func addWorkerMetadataGRPC(ctx context.Context, ar *pb.ActionResult) {
 	}
 
 	ar.ExecutionMetadata.Worker = worker
+}
+
+// requestMetadataKey is where an REv2 client puts the target label for a
+// call. The "-bin" suffix makes gRPC base64-decode the value, so it arrives
+// as raw proto bytes.
+const requestMetadataKey = "build.bazel.remote.execution.v2.requestmetadata-bin"
+
+// requestMetadataTarget returns the Bazel target label the client attached to
+// this call, or "" if it sent none. Absent or unparseable metadata is normal
+// rather than an error: the header is optional, and the HTTP cache protocol
+// has no equivalent.
+func requestMetadataTarget(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+
+	values := md.Get(requestMetadataKey)
+	if len(values) == 0 {
+		return ""
+	}
+
+	rm := &pb.RequestMetadata{}
+	if err := proto.Unmarshal([]byte(values[0]), rm); err != nil {
+		return ""
+	}
+
+	return rm.TargetId
 }

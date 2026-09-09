@@ -48,6 +48,7 @@ type Cache interface {
 
 	MaxSize() int64
 	Stats() (totalSize int64, reservedSize int64, numItems int, uncompressedSize int64)
+	LargestBlobs(n int) []BlobInfo
 	RegisterMetrics()
 }
 
@@ -803,6 +804,39 @@ func (c *diskCache) Stats() (totalSize int64, reservedSize int64, numItems int, 
 	defer c.mu.Unlock()
 
 	return c.lru.TotalSize(), c.lru.ReservedSize(), c.lru.Len(), c.lru.UncompressedSize()
+}
+
+// BlobInfo describes one cache entry, for the debugging endpoints.
+type BlobInfo struct {
+	// Kind is "cas", "ac" or "raw".
+	Kind string
+	Hash string
+
+	// Size is the logical (uncompressed) size. SizeOnDisk is the stored size,
+	// so possibly compressed and with a header, and is what fills the disk.
+	Size       int64
+	SizeOnDisk int64
+}
+
+// LargestBlobs returns up to n cache entries with the largest on-disk size,
+// in descending order, read from the in-memory index. No disk access is
+// involved, but the cache lock is held for the whole walk, so callers must
+// rate-limit this; see largestEntries.
+func (c *diskCache) LargestBlobs(n int) []BlobInfo {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.lru.largestEntries(n)
+}
+
+// splitLookupKey splits a "<kind>/<hash>" key, as built by cache.LookupKey.
+func splitLookupKey(key string) (kind string, hash string) {
+	i := strings.IndexByte(key, '/')
+	if i < 0 {
+		return "", key
+	}
+
+	return key[:i], key[i+1:]
 }
 
 func isSizeMismatch(requestedSize int64, foundSize int64) bool {

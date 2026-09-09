@@ -128,6 +128,7 @@ type Config struct {
 	MaxBlobSize                 int64                     `yaml:"max_blob_size"`
 	MaxProxyBlobSize            int64                     `yaml:"max_proxy_blob_size"`
 	MaxBlockingDiskOps          int64                     `yaml:"max_blocking_disk_ops"`
+	LargestBlobNames            int                       `yaml:"largest_blob_names"`
 
 	// Fields that are created by combinations of the flags above.
 	ProxyBackend cache.Proxy
@@ -187,7 +188,8 @@ func newFromArgs(dir string, maxSize int, storageMode string, zstdImplementation
 	maxSizeHardLimit int,
 	maxBlobSize int64,
 	maxProxyBlobSize int64,
-	maxBlockingDiskOps int64) (*Config, error) {
+	maxBlockingDiskOps int64,
+	largestBlobNames int) (*Config, error) {
 
 	c := Config{
 		HTTPAddress:                 httpAddress,
@@ -227,6 +229,7 @@ func newFromArgs(dir string, maxSize int, storageMode string, zstdImplementation
 		MaxBlobSize:                 maxBlobSize,
 		MaxProxyBlobSize:            maxProxyBlobSize,
 		MaxBlockingDiskOps:          maxBlockingDiskOps,
+		LargestBlobNames:            largestBlobNames,
 	}
 
 	err := validateConfig(&c)
@@ -687,5 +690,6 @@ func get(ctx *cli.Context) (*Config, error) {
 		ctx.Int64("max_blob_size"),
 		ctx.Int64("max_proxy_blob_size"),
 		ctx.Int64("max_blocking_disk_ops"),
+		ctx.Int("largest_blob_names"),
 	)
 }

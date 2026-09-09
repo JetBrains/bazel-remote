@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/buchgr/bazel-remote/v2/cache"
 	testutils "github.com/buchgr/bazel-remote/v2/utils"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -313,5 +315,72 @@ func TestAddWithSpaceReserved(t *testing.T) {
 	ok = lru.Add("hello", lruItem{size: 2, sizeOnDisk: 2})
 	if !ok {
 		t.Fatal("Expected to be able to add item with size 2")
+	}
+}
+
+// largestEntries backs GET /status/largest, and the endpoint's own tests stub
+// the cache out, so the ranking is only exercised here.
+func TestLargestEntries(t *testing.T) {
+	lru := NewSizedLRU(1024*1024, nil, 0)
+
+	if entries := lru.largestEntries(3); len(entries) != 0 {
+		t.Fatalf("empty cache: expected no entries, got %v", entries)
+	}
+
+	// Added smallest-on-disk first, so that returning the index order would
+	// not pass. The logical sizes rank the other way round on purpose: only
+	// the on-disk size may decide the order, and the two must not be swapped.
+	added := []BlobInfo{
+		{Kind: "cas", Hash: strings.Repeat("a", 64), Size: 5000, SizeOnDisk: 1000},
+		{Kind: "cas", Hash: strings.Repeat("b", 64), Size: 4000, SizeOnDisk: 2000},
+		{Kind: "ac", Hash: strings.Repeat("c", 64), Size: 3000, SizeOnDisk: 3000},
+		{Kind: "raw", Hash: strings.Repeat("d", 64), Size: 2000, SizeOnDisk: 4000},
+		{Kind: "cas", Hash: strings.Repeat("e", 64), Size: 1000, SizeOnDisk: 5000},
+	}
+
+	kinds := map[string]cache.EntryKind{"cas": cache.CAS, "ac": cache.AC, "raw": cache.RAW}
+	for _, blob := range added {
+		key := cache.LookupKey(kinds[blob.Kind], blob.Hash)
+		if !lru.Add(key, lruItem{size: blob.Size, sizeOnDisk: blob.SizeOnDisk}) {
+			t.Fatalf("Add(%s): failed inserting item", key)
+		}
+	}
+
+	// Descending by on-disk size, which is the reverse of the insertion order.
+	largestFirst := []BlobInfo{added[4], added[3], added[2], added[1], added[0]}
+
+	entries := lru.largestEntries(3)
+	if !reflect.DeepEqual(entries, largestFirst[:3]) {
+		t.Fatalf("largestEntries(3): expected %v, got %v", largestFirst[:3], entries)
+	}
+
+	// Asking for more than the cache holds is not an error.
+	entries = lru.largestEntries(len(added) + 2)
+	if !reflect.DeepEqual(entries, largestFirst) {
+		t.Fatalf("largestEntries(%d): expected %v, got %v", len(added)+2, largestFirst, entries)
+	}
+
+	for _, n := range []int{0, -1} {
+		if entries := lru.largestEntries(n); entries != nil {
+			t.Fatalf("largestEntries(%d): expected nil, got %v", n, entries)
+		}
+	}
+}
+
+// An entry no larger than the smallest of the current best n is discarded
+// without being pushed, which is what keeps the walk cheap. A tie exercises
+// that whatever order the index happens to be walked in.
+func TestLargestEntriesDiscardsTies(t *testing.T) {
+	lru := NewSizedLRU(1024*1024, nil, 0)
+
+	for _, hash := range []string{strings.Repeat("a", 64), strings.Repeat("b", 64)} {
+		key := cache.LookupKey(cache.CAS, hash)
+		if !lru.Add(key, lruItem{size: 100, sizeOnDisk: 100}) {
+			t.Fatalf("Add(%s): failed inserting item", key)
+		}
+	}
+
+	if entries := lru.largestEntries(1); len(entries) != 1 {
+		t.Fatalf("largestEntries(1): expected 1 entry, got %v", entries)
 	}
 }

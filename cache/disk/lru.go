@@ -1,6 +1,7 @@
 package disk
 
 import (
+	"container/heap"
 	"container/list"
 	"errors"
 	"fmt"
@@ -471,4 +472,63 @@ func (c *SizedLRU) calcTotalDiskSizeAndUpdatePeak(sizeOfNewFile int64) uint64 {
 func (c *SizedLRU) shiftToNextMetricPeriod() {
 	c.gaugeCacheSizeBytes.Set(float64(c.totalDiskSizePeak))
 	c.totalDiskSizePeak = uint64(c.currentSize) + uint64(c.queuedEvictionsSize.Load())
+}
+
+// largestEntries returns up to n entries with the largest on-disk size, in
+// descending order.
+//
+// This walks the whole index, so it costs O(len(cache)) regardless of n --
+// around 0.6 s at 8 million entries -- with the cache lock held throughout,
+// blocking all other cache traffic. Callers must rate-limit it, and it must
+// not be called from a request path.
+func (c *SizedLRU) largestEntries(n int) []BlobInfo {
+	if n <= 0 {
+		return nil
+	}
+
+	smallestFirst := &blobInfoHeap{}
+	for _, elem := range c.cache {
+		e := elem.Value.(*entry)
+
+		if smallestFirst.Len() >= n && e.value.sizeOnDisk <= (*smallestFirst)[0].SizeOnDisk {
+			continue
+		}
+
+		kind, hash := splitLookupKey(e.key)
+		heap.Push(smallestFirst, BlobInfo{
+			Kind:       kind,
+			Hash:       hash,
+			Size:       e.value.size,
+			SizeOnDisk: e.value.sizeOnDisk,
+		})
+		if smallestFirst.Len() > n {
+			heap.Pop(smallestFirst)
+		}
+	}
+
+	// Draining a min-heap yields ascending sizes, so fill from the back.
+	out := make([]BlobInfo, smallestFirst.Len())
+	for i := len(out) - 1; i >= 0; i-- {
+		out[i] = heap.Pop(smallestFirst).(BlobInfo)
+	}
+
+	return out
+}
+
+// blobInfoHeap orders by ascending on-disk size, keeping the smallest of the
+// current best n at the root where it is cheap to displace.
+type blobInfoHeap []BlobInfo
+
+func (h blobInfoHeap) Len() int           { return len(h) }
+func (h blobInfoHeap) Less(i, j int) bool { return h[i].SizeOnDisk < h[j].SizeOnDisk }
+func (h blobInfoHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+
+func (h *blobInfoHeap) Push(x interface{}) { *h = append(*h, x.(BlobInfo)) }
+
+func (h *blobInfoHeap) Pop() interface{} {
+	old := *h
+	last := len(old) - 1
+	item := old[last]
+	*h = old[:last]
+	return item
 }

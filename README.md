@@ -74,6 +74,45 @@ $ curl http://localhost:8080/status
 }
 ```
 
+**/status/largest**
+
+Returns the largest blobs in the cache, largest first, with the build output each one was
+written as where that is known. Accepts `?n=<count>` (default 100, maximum 10000).
+
+The sizes come from the in-memory index, so they cover the whole cache and cost no disk access.
+Walking that index holds the cache lock, so the ranking is served from a snapshot refreshed at
+most once a minute; `snapshot_age_seconds` reports how old it is.
+
+The names require `--largest_blob_names`, and cover only blobs whose action cache entry was
+written since the server started, and was parsed by the server -- so none are recorded over
+HTTP if `--disable_http_ac_validation` is set. `target_id` comes from the client's
+`RequestMetadata`, which the HTTP cache protocol does not carry, so it is populated for gRPC
+clients only.
+```
+$ curl 'http://localhost:8080/status/largest?n=2'
+{
+ "snapshot_age_seconds": 12,
+ "num_files": 621413,
+ "names_known": 4812,
+ "blobs": [
+  {
+   "kind": "cas",
+   "hash": "c907183dc195dc32ee7d5d0f0e0d3e5a0e2b1b1d1e0f0a0b0c0d0e0f00112233",
+   "size_on_disk": 264617984,
+   "logical_size": 402653184,
+   "path": "bazel-out/k8-fastbuild/bin/platform/util/libutil.jar",
+   "target_id": "//platform/util:util"
+  },
+  {
+   "kind": "cas",
+   "hash": "5647f05ec18958947d32874eeb788fa396a05d0bab7c1b71f112ceb7e9b31eee",
+   "size_on_disk": 198311936,
+   "logical_size": 198311936
+  }
+ ]
+}
+```
+
 **/cas/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855**
 
 The empty CAS blob is always available, even if the cache is empty. This can be used to test that
@@ -238,6 +277,11 @@ OPTIONS:
       be accepted from clients. Note that this limit is not applied to
       preexisting blobs in the cache. (default: 9223372036854775807)
       [$BAZEL_REMOTE_MAX_BLOB_SIZE]
+
+   --largest_blob_names value Remember the output path of up to this many of
+      the largest blobs, and report them from the /status/largest endpoint.
+      0 disables the names, but the endpoint still ranks blobs by size.
+      (default: 0) [$BAZEL_REMOTE_LARGEST_BLOB_NAMES]
 
    --max_proxy_blob_size value The maximum logical/uncompressed blob size
       that will be downloaded from proxies. Note that this limit is not applied
@@ -565,6 +609,9 @@ http_address: 0.0.0.0:8080
 #max_queued_uploads: 1000000
 # The largest blob size that will be accepted, for example 10MB:
 #max_blob_size: 10485760
+# Remember the output path of this many of the largest blobs, so that
+# /status/largest can report what they are. 0 disables the names:
+#largest_blob_names: 100000
 #
 # The maximum number of concurrent blocking filesystem operations (writes,
 # deletions and downloads from proxy backends). Requests above this limit

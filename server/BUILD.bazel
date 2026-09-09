@@ -16,6 +16,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cache:go_default_library",
+        "//cache/blobnames:go_default_library",
         "//cache/disk:go_default_library",
         "//cache/disk/casblob:go_default_library",
         "//genproto/build/bazel/remote/asset/v1:go_default_library",
@@ -49,9 +50,11 @@ go_library(
 go_test(
     name = "go_default_test",
     srcs = [
+        "grpc_ac_test.go",
         "grpc_asset_test.go",
         "grpc_cas_spliceblobs_test.go",
         "grpc_test.go",
+        "http_largest_test.go",
         "http_test.go",
     ],
     embed = [":go_default_library"],

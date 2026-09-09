@@ -124,6 +124,7 @@ func grpcTestSetupWithCustomCache(t *testing.T, mangleACKeys bool, validateAC bo
 			mangleACKeys,
 			enableRemoteAssetAPI,
 			testMaxCasBlobSizeBytes,
+			nil, // no blob name registry
 			diskCache, accessLogger, errorLogger)
 		if err2 != nil {
 			fmt.Println(err2)
@@ -2627,6 +2628,10 @@ func (c *StubCache) MaxSize() int64 {
 
 func (c *StubCache) Stats() (totalSize int64, reservedSize int64, numItems int, uncompressedSize int64) {
 	return 0, 0, 0, 0
+}
+
+func (c *StubCache) LargestBlobs(n int) []disk.BlobInfo {
+	return nil
 }
 
 func (c *StubCache) RegisterMetrics() {

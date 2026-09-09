@@ -22,6 +22,7 @@ import (
 	"github.com/buchgr/bazel-remote/v2/genproto/build/bazel/semver"
 
 	"github.com/buchgr/bazel-remote/v2/cache"
+	"github.com/buchgr/bazel-remote/v2/cache/blobnames"
 	"github.com/buchgr/bazel-remote/v2/cache/disk"
 	"github.com/buchgr/bazel-remote/v2/utils/validate"
 
@@ -43,6 +44,7 @@ type grpcServer struct {
 	depsCheck           bool
 	mangleACKeys        bool
 	maxCasBlobSizeBytes int64
+	blobNames           *blobnames.Registry
 }
 
 var readOnlyMethods = map[string]struct{}{
@@ -64,6 +66,7 @@ func ListenAndServeGRPC(
 	mangleACKeys bool,
 	enableRemoteAssetAPI bool,
 	maxCasBlobSizeBytes int64,
+	blobNames *blobnames.Registry,
 	c disk.Cache, a cache.Logger, e cache.Logger) error {
 
 	listener, err := net.Listen(network, addr)
@@ -71,7 +74,7 @@ func ListenAndServeGRPC(
 		return err
 	}
 
-	return ServeGRPC(listener, srv, validateACDeps, mangleACKeys, enableRemoteAssetAPI, maxCasBlobSizeBytes, c, a, e)
+	return ServeGRPC(listener, srv, validateACDeps, mangleACKeys, enableRemoteAssetAPI, maxCasBlobSizeBytes, blobNames, c, a, e)
 }
 
 func ServeGRPC(l net.Listener, srv *grpc.Server,
@@ -79,6 +82,7 @@ func ServeGRPC(l net.Listener, srv *grpc.Server,
 	mangleACKeys bool,
 	enableRemoteAssetAPI bool,
 	maxCasBlobSizeBytes int64,
+	blobNames *blobnames.Registry,
 	c disk.Cache, a cache.Logger, e cache.Logger) error {
 
 	s := &grpcServer{
@@ -88,6 +92,7 @@ func ServeGRPC(l net.Listener, srv *grpc.Server,
 		depsCheck:           validateACDepsCheck,
 		mangleACKeys:        mangleACKeys,
 		maxCasBlobSizeBytes: maxCasBlobSizeBytes,
+		blobNames:           blobNames,
 	}
 	pb.RegisterActionCacheServer(srv, s)
 	pb.RegisterCapabilitiesServer(srv, s)

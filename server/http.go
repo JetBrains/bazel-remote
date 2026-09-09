@@ -12,9 +12,11 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/buchgr/bazel-remote/v2/cache"
+	"github.com/buchgr/bazel-remote/v2/cache/blobnames"
 	"github.com/buchgr/bazel-remote/v2/cache/disk"
 	"github.com/buchgr/bazel-remote/v2/utils/validate"
 
@@ -35,6 +37,7 @@ var decoder, _ = zstd.NewReader(nil) // TODO: raise WithDecoderConcurrency ?
 type HTTPCache interface {
 	CacheHandler(w http.ResponseWriter, r *http.Request)
 	StatusPageHandler(w http.ResponseWriter, r *http.Request)
+	LargestBlobsHandler(w http.ResponseWriter, r *http.Request)
 	VerifyClientCertHandler(wrapMe http.Handler) http.Handler
 }
 
@@ -49,6 +52,16 @@ type httpCache struct {
 	checkClientCertForReads  bool
 	checkClientCertForWrites bool
 	maxCasBlobSizeBytes      int64
+	blobNames                *blobnames.Registry
+
+	// Snapshot of the largest-blob ranking, shared by every request so
+	// that the index is walked at most once per largestBlobsMaxAge.
+	// largestMu is held across a refresh, so only one walk is ever in
+	// flight.
+	largestMu       sync.Mutex
+	largestBlobs    []disk.BlobInfo
+	largestNumFiles int
+	largestTaken    time.Time
 }
 
 type statusPageData struct {
@@ -67,7 +80,7 @@ type statusPageData struct {
 // accessLogger will print one line for each HTTP request to stdout.
 // errorLogger will print unexpected server errors. Inexistent files and malformed URLs will not
 // be reported.
-func NewHTTPCache(cache disk.Cache, accessLogger cache.Logger, errorLogger cache.Logger, validateAC bool, mangleACKeys bool, checkClientCertForReads bool, checkClientCertForWrites bool, commit string, gitTags string, maxCasBlobSizeBytes int64) HTTPCache {
+func NewHTTPCache(cache disk.Cache, accessLogger cache.Logger, errorLogger cache.Logger, validateAC bool, mangleACKeys bool, checkClientCertForReads bool, checkClientCertForWrites bool, commit string, gitTags string, maxCasBlobSizeBytes int64, blobNames *blobnames.Registry) HTTPCache {
 
 	_, _, numItems, _ := cache.Stats()
 
@@ -82,6 +95,7 @@ func NewHTTPCache(cache disk.Cache, accessLogger cache.Logger, errorLogger cache
 		checkClientCertForReads:  checkClientCertForReads,
 		checkClientCertForWrites: checkClientCertForWrites,
 		maxCasBlobSizeBytes:      maxCasBlobSizeBytes,
+		blobNames:                blobNames,
 	}
 
 	if commit != "{STABLE_GIT_COMMIT}" {
@@ -331,6 +345,10 @@ func (h *httpCache) CacheHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Set once the ActionResult has been parsed, so that its outputs can
+		// be recorded after the write succeeds rather than before.
+		var parsedAC *pb.ActionResult
+
 		zstdCompressed := false
 
 		// Content-Encoding must be one of "identity", "zstd" or not present.
@@ -395,6 +413,8 @@ func (h *httpCache) CacheHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			parsedAC = ar
+
 			data, err = proto.Marshal(ar)
 			if err != nil {
 				msg := "Failed to marshal ActionResult"
@@ -449,6 +469,11 @@ func (h *httpCache) CacheHandler(w http.ResponseWriter, r *http.Request) {
 				h.errorLogger.Printf("PUT %s: %s", path(kind, hash), msg)
 			}
 		} else {
+			// Remember which outputs this result's large blobs are, while
+			// the paths are still in hand. parsedAC is nil, and so nothing
+			// is recorded, when AC validation is disabled.
+			h.blobNames.Record(parsedAC, "")
+
 			h.logResponse(http.StatusOK, r)
 		}
 
@@ -584,4 +609,126 @@ func (h *httpCache) VerifyClientCertHandler(wrapMe http.Handler) http.Handler {
 
 		wrapMe.ServeHTTP(w, r)
 	})
+}
+
+const (
+	defaultLargestBlobs = 100
+	maxLargestBlobs     = 10000
+
+	// Refreshing the ranking holds the cache lock for the whole index walk,
+	// blocking all other cache traffic. Requests share one snapshot,
+	// refreshed no more often than this, so that repeated requests cannot
+	// stall the cache for an unbounded fraction of the time.
+	largestBlobsMaxAge = time.Minute
+)
+
+type largestBlobsData struct {
+	// SnapshotAge is how many seconds ago the ranking was taken. The names
+	// and the counts below are current as of the request.
+	SnapshotAge int64 `json:"snapshot_age_seconds"`
+
+	NumFiles   int              `json:"num_files"`
+	NamesKnown int              `json:"names_known"`
+	Blobs      []largestBlobRow `json:"blobs"`
+}
+
+type largestBlobRow struct {
+	Kind        string `json:"kind"`
+	Hash        string `json:"hash"`
+	SizeOnDisk  int64  `json:"size_on_disk"`
+	LogicalSize int64  `json:"logical_size"`
+
+	// Populated only when the blob's origin is known, which requires an
+	// ActionResult referencing it to have been written since this server
+	// started.
+	Path     string `json:"path,omitempty"`
+	TargetID string `json:"target_id,omitempty"`
+}
+
+// lookupBlobName returns the recorded origin of a blob. Only CAS blobs can
+// have one: an AC or RAW key is an action digest, never an output digest.
+func (h *httpCache) lookupBlobName(blob disk.BlobInfo) (blobnames.Name, bool) {
+	if blob.Kind != cache.CAS.String() {
+		return blobnames.Name{}, false
+	}
+
+	return h.blobNames.Lookup(blob.Hash)
+}
+
+// largestBlobsSnapshot returns the shared ranking, refreshing it first if it
+// is older than largestBlobsMaxAge. Callers that arrive during a refresh wait
+// for it and then use its result, rather than each starting a walk of their
+// own.
+func (h *httpCache) largestBlobsSnapshot() (blobs []disk.BlobInfo, numFiles int, taken time.Time) {
+	h.largestMu.Lock()
+	defer h.largestMu.Unlock()
+
+	if time.Since(h.largestTaken) >= largestBlobsMaxAge {
+		// Always keep the longest list a request may ask for, so that a
+		// request for more entries than the last one can still be served
+		// from the snapshot. The walk costs the same either way.
+		h.largestBlobs = h.cache.LargestBlobs(maxLargestBlobs)
+		_, _, h.largestNumFiles, _ = h.cache.Stats()
+		h.largestTaken = time.Now()
+	}
+
+	return h.largestBlobs, h.largestNumFiles, h.largestTaken
+}
+
+// Produce a debugging page listing the largest blobs in the cache, largest
+// first, naming the build output each one was written as where that is known.
+func (h *httpCache) LargestBlobsHandler(w http.ResponseWriter, r *http.Request) {
+	defer func() { _ = r.Body.Close() }()
+
+	n := defaultLargestBlobs
+	if raw := r.URL.Query().Get("n"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "the 'n' parameter must be a positive integer",
+				http.StatusBadRequest)
+			h.logResponse(http.StatusBadRequest, r)
+			return
+		}
+		if parsed > maxLargestBlobs {
+			parsed = maxLargestBlobs
+		}
+		n = parsed
+	}
+
+	blobs, numItems, taken := h.largestBlobsSnapshot()
+	if n < len(blobs) {
+		blobs = blobs[:n]
+	}
+
+	rows := make([]largestBlobRow, 0, len(blobs))
+	for _, blob := range blobs {
+		row := largestBlobRow{
+			Kind:        blob.Kind,
+			Hash:        blob.Hash,
+			SizeOnDisk:  blob.SizeOnDisk,
+			LogicalSize: blob.Size,
+		}
+
+		if name, ok := h.lookupBlobName(blob); ok {
+			row.Path = name.Path
+			row.TargetID = name.TargetID
+		}
+
+		rows = append(rows, row)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", " ")
+	h.logResponse(http.StatusOK, r)
+
+	err := enc.Encode(largestBlobsData{
+		SnapshotAge: int64(time.Since(taken).Seconds()),
+		NumFiles:    numItems,
+		NamesKnown:  h.blobNames.Len(),
+		Blobs:       rows,
+	})
+	if err != nil {
+		h.errorLogger.Printf("Failed to encode largest blobs json: %s", err.Error())
+	}
 }

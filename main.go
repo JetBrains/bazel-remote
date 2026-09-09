@@ -15,6 +15,7 @@ import (
 
 	auth "github.com/abbot/go-http-auth"
 
+	"github.com/buchgr/bazel-remote/v2/cache/blobnames"
 	"github.com/buchgr/bazel-remote/v2/cache/disk"
 
 	"github.com/buchgr/bazel-remote/v2/config"
@@ -200,8 +201,17 @@ func run(ctx *cli.Context) error {
 	}
 	log.Println("Mangling non-empty instance names with AC keys:", acKeyManglingStatus)
 
+	// Shared by both servers, so that a name recorded over one protocol is
+	// visible to the endpoint served by the other.
+	blobNames := blobnames.NewRegistry(c.LargestBlobNames)
+	if blobNames != nil {
+		log.Println("Largest blob names: remembering up to", c.LargestBlobNames, "blobs")
+	} else {
+		log.Println("Largest blob names: disabled")
+	}
+
 	servers.Go(func() error {
-		err := startHttpServer(c, &httpServer, htpasswdSecrets, idleTimer, httpSem, diskCache)
+		err := startHttpServer(c, &httpServer, htpasswdSecrets, idleTimer, httpSem, diskCache, blobNames)
 		if err != nil {
 			log.Fatal("HTTP server returned fatal error:", err)
 		}
@@ -210,7 +220,7 @@ func run(ctx *cli.Context) error {
 
 	if c.GRPCAddress != "none" {
 		servers.Go(func() error {
-			err := startGrpcServer(c, &grpcServer, htpasswdSecrets, idleTimer, grpcSem, diskCache)
+			err := startGrpcServer(c, &grpcServer, htpasswdSecrets, idleTimer, grpcSem, diskCache, blobNames)
 			if err != nil {
 				log.Fatal("gRPC server returned fatal error:", err)
 			}
@@ -238,7 +248,8 @@ func run(ctx *cli.Context) error {
 
 func startHttpServer(c *config.Config, httpServer **http.Server,
 	htpasswdSecrets auth.SecretProvider, idleTimer *idle.Timer,
-	httpSem *semaphore.Weighted, diskCache disk.Cache) error {
+	httpSem *semaphore.Weighted, diskCache disk.Cache,
+	blobNames *blobnames.Registry) error {
 
 	mux := http.NewServeMux()
 	*httpServer = &http.Server{
@@ -253,7 +264,7 @@ func startHttpServer(c *config.Config, httpServer **http.Server,
 	validateAC := !c.DisableHTTPACValidation
 	h := server.NewHTTPCache(diskCache, c.AccessLogger, c.ErrorLogger, validateAC,
 		c.EnableACKeyInstanceMangling, checkClientCertForReads, checkClientCertForWrites, gitCommit, gitTags,
-		c.MaxBlobSize)
+		c.MaxBlobSize, blobNames)
 
 	cacheHandler := h.CacheHandler
 	var ldapAuthenticator authenticator
@@ -285,17 +296,28 @@ func startHttpServer(c *config.Config, httpServer **http.Server,
 		})
 	}
 
-	var statusHandler http.HandlerFunc = h.StatusPageHandler
-
-	if !c.AllowUnauthenticatedReads {
-		if c.TLSCaFile != "" {
-			statusHandler = h.VerifyClientCertHandler(statusHandler).ServeHTTP
-		} else if c.HtpasswdFile != "" {
-			statusHandler = basicAuthWrapper(statusHandler, &basicAuthenticator)
-		} else if c.LDAP != nil {
-			statusHandler = ldapAuthWrapper(statusHandler, ldapAuthenticator)
+	authWrap := func(handler http.HandlerFunc) http.HandlerFunc {
+		if c.AllowUnauthenticatedReads {
+			return handler
 		}
+
+		if c.TLSCaFile != "" {
+			return h.VerifyClientCertHandler(handler).ServeHTTP
+		} else if c.HtpasswdFile != "" {
+			return basicAuthWrapper(handler, &basicAuthenticator)
+		} else if c.LDAP != nil {
+			return ldapAuthWrapper(handler, ldapAuthenticator)
+		}
+
+		return handler
 	}
+
+	statusHandler := authWrap(h.StatusPageHandler)
+
+	// Sizes on this endpoint come from the in-memory index, so it is useful
+	// even when the name registry is disabled. It exposes output paths and
+	// target labels, so it gets the same authentication as /status.
+	largestHandler := authWrap(h.LargestBlobsHandler)
 
 	if c.EnableEndpointMetrics {
 		log.Println("Endpoint metrics: enabled")
@@ -339,6 +361,7 @@ func startHttpServer(c *config.Config, httpServer **http.Server,
 	}
 
 	mux.HandleFunc("/status", statusHandler)
+	mux.HandleFunc("/status/largest", largestHandler)
 	mux.HandleFunc("/", cacheHandler)
 
 	var ln net.Listener
@@ -391,7 +414,8 @@ func startHttpServer(c *config.Config, httpServer **http.Server,
 
 func startGrpcServer(c *config.Config, grpcServer **grpc.Server,
 	htpasswdSecrets auth.SecretProvider, idleTimer *idle.Timer,
-	grpcSem *semaphore.Weighted, diskCache disk.Cache) error {
+	grpcSem *semaphore.Weighted, diskCache disk.Cache,
+	blobNames *blobnames.Registry) error {
 
 	opts := []grpc.ServerOption{}
 	streamInterceptors := []grpc.StreamServerInterceptor{}
@@ -465,6 +489,7 @@ func startGrpcServer(c *config.Config, grpcServer **grpc.Server,
 		c.EnableACKeyInstanceMangling,
 		enableRemoteAssetAPI,
 		c.MaxBlobSize,
+		blobNames,
 		diskCache, c.AccessLogger, c.ErrorLogger)
 }
 

@@ -193,6 +193,12 @@ func GetCliFlags() []cli.Flag {
 			DefaultText: strconv.FormatInt(math.MaxInt64, 10),
 			EnvVars:     []string{"BAZEL_REMOTE_MAX_BLOB_SIZE"},
 		},
+		&cli.IntFlag{
+			Name:    "largest_blob_names",
+			Value:   0,
+			Usage:   "Remember the output path of up to this many of the largest blobs, and report them from the /status/largest endpoint. 0 disables the names, but the endpoint still ranks blobs by size.",
+			EnvVars: []string{"BAZEL_REMOTE_LARGEST_BLOB_NAMES"},
+		},
 		&cli.Int64Flag{
 			Name:        "max_proxy_blob_size",
 			Value:       math.MaxInt64,

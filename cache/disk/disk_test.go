@@ -1854,3 +1854,20 @@ func TestResultFromProxyTooLargeToReserve(t *testing.T) {
 
 	close(fakeProxy.getEvents)
 }
+
+func TestSplitLookupKey(t *testing.T) {
+	for _, kind := range []cache.EntryKind{cache.CAS, cache.AC, cache.RAW} {
+		hash := strings.Repeat("f", 64)
+
+		gotKind, gotHash := splitLookupKey(cache.LookupKey(kind, hash))
+		if gotKind != kind.String() || gotHash != hash {
+			t.Errorf("splitLookupKey(%s/%s): got %q, %q", kind, hash, gotKind, gotHash)
+		}
+	}
+
+	// Not produced by cache.LookupKey, but the index is keyed by plain
+	// strings, so don't lose the hash if one ever lacks a kind.
+	if gotKind, gotHash := splitLookupKey("nokind"); gotKind != "" || gotHash != "nokind" {
+		t.Errorf(`splitLookupKey("nokind"): got %q, %q`, gotKind, gotHash)
+	}
+}
