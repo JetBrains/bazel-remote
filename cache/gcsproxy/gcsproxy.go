@@ -34,8 +34,9 @@ func New(bucket string, useDefaultCredentials bool, jsonCredentialsFile string, 
 			err = fmt.Errorf("failed to read Google Credentials file '%s': %v", jsonCredentialsFile, err)
 			return nil, err
 		}
-		config, err := google.CredentialsFromJSON(context.Background(), jsonConfig,
-			"https://www.googleapis.com/auth/devstorage.read_write")
+		config, err := google.CredentialsFromJSONWithTypeAndParams(context.Background(), jsonConfig,
+			google.ServiceAccount,
+			google.CredentialsParams{Scopes: []string{"https://www.googleapis.com/auth/devstorage.read_write"}})
 		if err != nil {
 			err = fmt.Errorf("the provided Google Credentials file '%s' couldn't be parsed: %v",
 				jsonCredentialsFile, err)

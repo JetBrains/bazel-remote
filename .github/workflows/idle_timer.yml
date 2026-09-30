@@ -12,10 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/setup-go@v3
+      - uses: actions/setup-go@v7
         with:
-          go-version: '1.23.0'
-      - uses: actions/checkout@v4
+          go-version: '1.27.0'
+      - uses: actions/checkout@v7
       - name: build bazel-remote
         run: ./linux-build.sh
       - name: run with idle-timeout 1m
